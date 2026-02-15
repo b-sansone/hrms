@@ -698,7 +698,11 @@ class SalarySlip(TransactionBase):
 			if cint(leave.half_day) and (leave.half_day_date == d or leave.from_date == leave.to_date):
 				is_half_day_leave = True
 
-			equivalent_lwp_count = (1 - daily_wages_fraction_for_half_day) if is_half_day_leave else 1
+			is_hours_based_leave = flt(leave.leave_hours) and leave.from_date == leave.to_date
+			if is_hours_based_leave:
+				equivalent_lwp_count = flt(leave.total_leave_days)
+			else:
+				equivalent_lwp_count = (1 - daily_wages_fraction_for_half_day) if is_half_day_leave else 1
 
 			if cint(leave.is_ppl):
 				equivalent_lwp_count *= (
@@ -2558,6 +2562,8 @@ def get_lwp_or_ppl_for_date_range(employee, start_date, end_date):
 			LeaveApplication.to_date,
 			LeaveApplication.half_day,
 			LeaveApplication.half_day_date,
+			LeaveApplication.total_leave_days,
+			LeaveApplication.leave_hours,
 		)
 		.where(
 			((LeaveType.is_lwp == 1) | (LeaveType.is_ppl == 1))

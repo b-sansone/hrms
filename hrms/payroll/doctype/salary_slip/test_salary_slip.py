@@ -501,6 +501,38 @@ class TestSalarySlip(IntegrationTestCase):
 		self.assertEqual(ss.payment_days, days_in_month - no_of_holidays - 3.75)
 
 	@change_settings("Payroll Settings", {"payroll_based_on": "Leave"})
+	def test_payment_days_with_lwp_leave_in_hours(self):
+		"""LWP leave applied in hours should deduct fractional days, not a full day"""
+		no_of_days = get_no_of_days()
+
+		emp_id = make_employee("test_lwp_leave_in_hours@salary.com")
+		frappe.db.set_value("Employee", emp_id, {"relieving_date": None, "status": "Active"})
+
+		frappe.db.set_value("Leave Type", "Leave Without Pay", "include_holiday", 0)
+
+		# Monday after the first Sunday - guaranteed working day
+		working_day = add_days(get_first_sunday(), 1)
+
+		frappe.db.set_single_value("HR Settings", "enable_leave_in_hours", 1)
+		frappe.db.set_single_value("HR Settings", "hours_per_working_day", 8)
+
+		try:
+			# 1 hour LWP on a single working day: expected LWP = 1/8 = 0.125 days
+			make_leave_application(
+				emp_id, working_day, working_day, "Leave Without Pay", leave_hours=1
+			)
+
+			ss = make_employee_salary_slip(emp_id, "Monthly", "Test LWP Leave In Hours")
+
+			self.assertEqual(ss.leave_without_pay, 0.125)
+
+			days_in_month = no_of_days[0]
+			no_of_holidays = no_of_days[1]
+			self.assertEqual(ss.payment_days, days_in_month - no_of_holidays - 0.125)
+		finally:
+			frappe.db.set_single_value("HR Settings", "enable_leave_in_hours", 0)
+
+	@change_settings("Payroll Settings", {"payroll_based_on": "Leave"})
 	def test_payment_days_calculation_for_lwp_on_month_boundaries(self):
 		from hrms.hr.doctype.holiday_list_assignment.test_holiday_list_assignment import (
 			create_holiday_list_assignment,
@@ -2498,6 +2530,7 @@ def make_leave_application(
 	company=None,
 	half_day=False,
 	half_day_date=None,
+	leave_hours=0,
 	submit=True,
 ):
 	create_user("test@example.com")
@@ -2511,6 +2544,7 @@ def make_leave_application(
 			to_date=to_date,
 			half_day=half_day,
 			half_day_date=half_day_date,
+			leave_hours=leave_hours or None,
 			company=company or erpnext.get_default_company() or "_Test Company",
 			status="Approved",
 			leave_approver="test@example.com",
