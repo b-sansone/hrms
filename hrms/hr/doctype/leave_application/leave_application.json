@@ -20,6 +20,7 @@
   "to_date",
   "half_day",
   "half_day_date",
+  "leave_hours",
   "total_leave_days",
   "column_break1",
   "description",
@@ -127,6 +128,13 @@
    "fieldname": "half_day_date",
    "fieldtype": "Date",
    "label": "Half Day Date"
+  },
+  {
+   "fieldname": "leave_hours",
+   "fieldtype": "Float",
+   "label": "Leave Hours",
+   "no_copy": 0,
+   "precision": "2"
   },
   {
    "fieldname": "total_leave_days",

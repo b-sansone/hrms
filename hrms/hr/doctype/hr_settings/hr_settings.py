@@ -4,8 +4,9 @@
 # For license information, please see license.txt
 
 import frappe
+from frappe import _
 from frappe.model.document import Document
-from frappe.utils import format_date
+from frappe.utils import flt, format_date
 
 # Wether to proceed with frequency change
 PROCEED_WITH_FREQUENCY_CHANGE = False
@@ -14,12 +15,20 @@ PROCEED_WITH_FREQUENCY_CHANGE = False
 class HRSettings(Document):
 	def validate(self):
 		self.set_naming_series()
+		self.validate_hours_per_working_day()
 
 		# Based on proceed flag
 		global PROCEED_WITH_FREQUENCY_CHANGE
 		if not PROCEED_WITH_FREQUENCY_CHANGE:
 			self.validate_frequency_change()
 		PROCEED_WITH_FREQUENCY_CHANGE = False
+
+	def validate_hours_per_working_day(self):
+		if self.enable_leave_in_hours:
+			if not self.hours_per_working_day or flt(self.hours_per_working_day) <= 0:
+				frappe.throw(_("Hours Per Working Day must be greater than 0"))
+			if flt(self.hours_per_working_day) > 24:
+				frappe.throw(_("Hours Per Working Day cannot exceed 24"))
 
 	def set_naming_series(self):
 		from erpnext.utilities.naming import set_by_naming_series

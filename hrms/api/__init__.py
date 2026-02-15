@@ -85,6 +85,8 @@ def get_hr_settings() -> dict:
 	return frappe._dict(
 		allow_employee_checkin_from_mobile_app=settings.allow_employee_checkin_from_mobile_app,
 		allow_geolocation_tracking=settings.allow_geolocation_tracking,
+		enable_leave_in_hours=settings.enable_leave_in_hours,
+		hours_per_working_day=settings.hours_per_working_day or 8,
 	)
 
 
@@ -338,6 +340,7 @@ def get_leave_applications(
 		"to_date",
 		"half_day",
 		"half_day_date",
+		"leave_hours",
 		"description",
 		"total_leave_days",
 		"leave_balance",

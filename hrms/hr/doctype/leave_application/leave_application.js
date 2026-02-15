@@ -38,12 +38,14 @@ frappe.ui.form.on("Leave Application", {
 	},
 
 	validate: function (frm) {
-		if (frm.doc.from_date === frm.doc.to_date && cint(frm.doc.half_day)) {
-			frm.doc.half_day_date = frm.doc.from_date;
-		} else if (frm.doc.half_day === 0) {
-			frm.doc.half_day_date = "";
+		if (!frm.leave_in_hours_enabled) {
+			if (frm.doc.from_date === frm.doc.to_date && cint(frm.doc.half_day)) {
+				frm.doc.half_day_date = frm.doc.from_date;
+			} else if (frm.doc.half_day === 0) {
+				frm.doc.half_day_date = "";
+			}
+			frm.toggle_reqd("half_day_date", cint(frm.doc.half_day));
 		}
-		frm.toggle_reqd("half_day_date", cint(frm.doc.half_day));
 	},
 
 	make_dashboard: function (frm) {
@@ -90,6 +92,14 @@ frappe.ui.form.on("Leave Application", {
 
 	refresh: function (frm) {
 		hrms.leave_utils.add_view_ledger_button(frm);
+
+		// Read hours mode settings passed from Python onload
+		if (frm.doc.__onload) {
+			frm.leave_in_hours_enabled = cint(frm.doc.__onload.enable_leave_in_hours);
+			frm.hours_per_working_day = flt(frm.doc.__onload.hours_per_working_day) || 8;
+		}
+		frm.trigger("toggle_hours_mode");
+
 		if (frm.is_new()) {
 			frm.trigger("calculate_total_days");
 		}
@@ -156,14 +166,20 @@ frappe.ui.form.on("Leave Application", {
 	from_date: function (frm) {
 		frm.events.validate_from_to_date(frm, "from_date");
 		frm.trigger("make_dashboard");
-		frm.trigger("half_day_datepicker");
+		if (!frm.leave_in_hours_enabled) {
+			frm.trigger("half_day_datepicker");
+		}
+		frm.trigger("set_leave_hours_editability");
 		frm.trigger("calculate_total_days");
 	},
 
 	to_date: function (frm) {
 		frm.events.validate_from_to_date(frm, "to_date");
 		frm.trigger("make_dashboard");
-		frm.trigger("half_day_datepicker");
+		if (!frm.leave_in_hours_enabled) {
+			frm.trigger("half_day_datepicker");
+		}
+		frm.trigger("set_leave_hours_editability");
 		frm.trigger("calculate_total_days");
 	},
 
@@ -231,25 +247,77 @@ frappe.ui.form.on("Leave Application", {
 	},
 
 	calculate_total_days: function (frm) {
-		if (frm.doc.from_date && frm.doc.to_date && frm.doc.employee && frm.doc.leave_type) {
-			// server call is done to include holidays in leave days calculations
-			return frappe.call({
-				method: "hrms.hr.doctype.leave_application.leave_application.get_number_of_leave_days",
-				args: {
-					employee: frm.doc.employee,
-					leave_type: frm.doc.leave_type,
-					from_date: frm.doc.from_date,
-					to_date: frm.doc.to_date,
-					half_day: frm.doc.half_day,
-					half_day_date: frm.doc.half_day_date,
-				},
-				callback: function (r) {
-					if (r && r.message) {
-						frm.set_value("total_leave_days", r.message);
-						frm.trigger("get_leave_balance");
+		if (!frm.doc.from_date || !frm.doc.to_date || !frm.doc.employee || !frm.doc.leave_type) return;
+
+		// Always call the server to account for holidays regardless of hours mode.
+		return frappe.call({
+			method: "hrms.hr.doctype.leave_application.leave_application.get_number_of_leave_days",
+			args: {
+				employee: frm.doc.employee,
+				leave_type: frm.doc.leave_type,
+				from_date: frm.doc.from_date,
+				to_date: frm.doc.to_date,
+				half_day: frm.leave_in_hours_enabled ? 0 : frm.doc.half_day,
+				half_day_date: frm.leave_in_hours_enabled ? null : frm.doc.half_day_date,
+			},
+			callback: function (r) {
+				if (r && r.message !== undefined) {
+					const is_single_day_hours =
+						frm.leave_in_hours_enabled && frm.doc.from_date === frm.doc.to_date;
+
+					// For single-day hours mode r.message is 1 (working day) or 0 (holiday).
+					// Use it as a gate: compute fractional days from entered hours, or 0 for holidays.
+					// For all other cases (hours mode off, or multi-day) use r.message directly.
+					const days = is_single_day_hours
+						? (r.message > 0 ? flt(frm.doc.leave_hours) / frm.hours_per_working_day : 0)
+						: r.message;
+
+					frm.set_value("total_leave_days", days);
+					if (frm.leave_in_hours_enabled && frm.hours_per_working_day) {
+						frm.set_value("leave_hours", flt(days) * frm.hours_per_working_day);
 					}
-				},
-			});
+					frm.trigger("get_leave_balance");
+				}
+			},
+		});
+	},
+
+	toggle_hours_mode: function (frm) {
+		const hours_on = !!frm.leave_in_hours_enabled;
+		// Show leave_hours field only when hours mode is on
+		frm.toggle_display("leave_hours", hours_on);
+		// Hide half_day and half_day_date when hours mode is on
+		frm.toggle_display("half_day", !hours_on);
+		frm.toggle_display("half_day_date", !hours_on);
+		if (hours_on) {
+			frm.trigger("set_leave_hours_editability");
+		}
+	},
+
+	set_leave_hours_editability: function (frm) {
+		if (!frm.leave_in_hours_enabled) return;
+
+		const is_single_day = (
+			frm.doc.from_date &&
+			frm.doc.to_date &&
+			frm.doc.from_date === frm.doc.to_date
+		);
+		// Editable only for single-day leaves
+		frm.set_df_property("leave_hours", "read_only", !is_single_day);
+
+		// For multi-day: update the display value
+		if (!is_single_day && frm.doc.total_leave_days && frm.hours_per_working_day) {
+			frm.set_value("leave_hours", flt(frm.doc.total_leave_days) * frm.hours_per_working_day);
+		}
+	},
+
+	leave_hours: function (frm) {
+		if (!frm.leave_in_hours_enabled) return;
+		if (!frm.doc.from_date || !frm.doc.to_date) return;
+
+		// Delegate to calculate_total_days so the holiday check is always applied.
+		if (frm.doc.from_date === frm.doc.to_date) {
+			frm.trigger("calculate_total_days");
 		}
 	},
 

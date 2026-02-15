@@ -39,6 +39,13 @@ from hrms.utils import get_employee_email
 from hrms.utils.holiday_list import get_holiday_dates_between_range
 
 
+def get_hours_per_working_day() -> float | None:
+	"""Returns hours_per_working_day from HR Settings if leave-in-hours mode is enabled, else None."""
+	if frappe.db.get_single_value("HR Settings", "enable_leave_in_hours"):
+		return flt(frappe.db.get_single_value("HR Settings", "hours_per_working_day")) or 8
+	return None
+
+
 class LeaveDayBlockedError(frappe.ValidationError):
 	pass
 
@@ -77,7 +84,9 @@ class LeaveApplication(Document, PWANotificationsMixin):
 		validate_active_employee(self.employee)
 		set_employee_name(self)
 		self.validate_dates()
+		self.prepare_leave_hours()
 		self.validate_balance_leaves()
+		self.sync_leave_hours_display()
 		self.validate_leave_overlap()
 		self.validate_max_days()
 		self.show_block_day_warning()
@@ -314,9 +323,16 @@ class LeaveApplication(Document, PWANotificationsMixin):
 			self.create_or_update_attendance(attendance_name, date)
 
 	def create_or_update_attendance(self, attendance_name, date):
-		status = (
-			"Half Day" if self.half_day_date and getdate(date) == getdate(self.half_day_date) else "On Leave"
-		)
+		hours_per_day = get_hours_per_working_day()
+		is_single_day = getdate(self.from_date) == getdate(self.to_date)
+
+		if hours_per_day and is_single_day and self.leave_hours:
+			# hours mode: determine status from how many hours are being taken
+			status = "Half Day" if flt(self.leave_hours) < flt(hours_per_day) else "On Leave"
+		else:
+			status = (
+				"Half Day" if self.half_day_date and getdate(date) == getdate(self.half_day_date) else "On Leave"
+			)
 
 		if attendance_name:
 			# update existing attendance, change absent to on leave or half day
@@ -407,14 +423,22 @@ class LeaveApplication(Document, PWANotificationsMixin):
 		precision = cint(frappe.db.get_single_value("System Settings", "float_precision")) or 2
 
 		if self.from_date and self.to_date:
-			self.total_leave_days = get_number_of_leave_days(
-				self.employee,
-				self.leave_type,
-				self.from_date,
-				self.to_date,
-				self.half_day,
-				self.half_day_date,
-			)
+			hours_per_day = get_hours_per_working_day()
+			is_single_day = getdate(self.from_date) == getdate(self.to_date)
+
+			if hours_per_day and is_single_day:
+				# total_leave_days was already set from leave_hours in prepare_leave_hours
+				# do not call get_number_of_leave_days as it would overwrite the hours-derived value
+				pass
+			else:
+				self.total_leave_days = get_number_of_leave_days(
+					self.employee,
+					self.leave_type,
+					self.from_date,
+					self.to_date,
+					self.half_day,
+					self.half_day_date,
+				)
 
 			if self.total_leave_days <= 0:
 				frappe.throw(
@@ -649,7 +673,57 @@ class LeaveApplication(Document, PWANotificationsMixin):
 				)
 			day = add_days(day, 1)
 
+	def prepare_leave_hours(self):
+		"""Phase 1 of leave-in-hours mode: derive total_leave_days for single-day, suppress half_day.
+		Must be called before validate_balance_leaves so total_leave_days is correctly set."""
+		hours_per_day = get_hours_per_working_day()
+		if not hours_per_day:
+			return
+
+		# Always suppress half_day when hours mode is on
+		self.half_day = 0
+		self.half_day_date = None
+
+		is_single_day = self.from_date and self.to_date and getdate(self.from_date) == getdate(self.to_date)
+
+		if is_single_day:
+			if not self.leave_hours or flt(self.leave_hours) <= 0:
+				frappe.throw(_("Leave Hours must be greater than 0 for single-day leave"))
+			if flt(self.leave_hours) > flt(hours_per_day):
+				frappe.throw(
+					_("Leave Hours ({0}) cannot exceed Hours Per Working Day ({1})").format(
+						flt(self.leave_hours), flt(hours_per_day)
+					)
+				)
+			# Check if the day is a holiday before computing fractional days.
+			# If the leave type excludes holidays and the day is a holiday, set
+			# total_leave_days to 0 so validate_balance_leaves raises the standard error.
+			if not frappe.db.get_value("Leave Type", self.leave_type, "include_holiday"):
+				if get_holidays(self.employee, self.from_date, self.to_date):
+					self.total_leave_days = 0
+					return
+
+			# Override total_leave_days so validate_balance_leaves uses the hours-derived value
+			self.total_leave_days = flt(self.leave_hours) / flt(hours_per_day)
+
+	def sync_leave_hours_display(self):
+		"""Phase 2 of leave-in-hours mode: set leave_hours display value for multi-day leaves.
+		Must be called after validate_balance_leaves so total_leave_days has been computed."""
+		hours_per_day = get_hours_per_working_day()
+		if not hours_per_day:
+			self.leave_hours = None
+			return
+
+		is_single_day = self.from_date and self.to_date and getdate(self.from_date) == getdate(self.to_date)
+
+		if not is_single_day and self.total_leave_days:
+			self.leave_hours = flt(self.total_leave_days) * flt(hours_per_day)
+
 	def set_half_day_date(self):
+		if get_hours_per_working_day():
+			# hours mode is on: half_day fields are suppressed by prepare_leave_hours
+			return
+
 		if self.from_date == self.to_date and self.half_day == 1:
 			self.half_day_date = self.from_date
 
@@ -880,6 +954,14 @@ class LeaveApplication(Document, PWANotificationsMixin):
 		self.set_onload(
 			"self_leave_approval_not_allowed",
 			frappe.db.get_single_value("HR Settings", "prevent_self_leave_approval"),
+		)
+		self.set_onload(
+			"enable_leave_in_hours",
+			frappe.db.get_single_value("HR Settings", "enable_leave_in_hours"),
+		)
+		self.set_onload(
+			"hours_per_working_day",
+			frappe.db.get_single_value("HR Settings", "hours_per_working_day") or 8,
 		)
 
 
@@ -1237,27 +1319,36 @@ def get_leaves_for_period(
 			if leave_entry.to_date > getdate(to_date):
 				leave_entry.to_date = to_date
 
-			half_day = 0
-			half_day_date = None
-			# fetch half day date for leaves with half days
-			if leave_entry.leaves % 1:
-				half_day = 1
-				half_day_date = frappe.db.get_value(
-					"Leave Application", leave_entry.transaction_name, "half_day_date"
-				)
+			is_single_day_entry = leave_entry.from_date == leave_entry.to_date
 
-			leave_days += (
-				get_number_of_leave_days(
-					employee,
-					leave_type,
-					leave_entry.from_date,
-					leave_entry.to_date,
-					half_day,
-					half_day_date,
-					holiday_list=leave_entry.holiday_list,
+			if is_single_day_entry and leave_entry.leaves % 1:
+				# For single-day fractional leaves, use the stored ledger value directly.
+				# This correctly handles both traditional half-day leaves (0.5) and
+				# leave-in-hours entries (e.g. -0.375 for 3 hours on an 8-hour day).
+				# Recalculating via get_number_of_leave_days would lose sub-0.5 precision.
+				leave_days += leave_entry.leaves
+			else:
+				half_day = 0
+				half_day_date = None
+				# fetch half day date for multi-day leaves with half days
+				if leave_entry.leaves % 1:
+					half_day = 1
+					half_day_date = frappe.db.get_value(
+						"Leave Application", leave_entry.transaction_name, "half_day_date"
+					)
+
+				leave_days += (
+					get_number_of_leave_days(
+						employee,
+						leave_type,
+						leave_entry.from_date,
+						leave_entry.to_date,
+						half_day,
+						half_day_date,
+						holiday_list=leave_entry.holiday_list,
+					)
+					* -1
 				)
-				* -1
-			)
 
 	return leave_days
 

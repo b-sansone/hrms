@@ -33,6 +33,8 @@
   "leave_status_notification_template",
   "restrict_backdated_leave_application",
   "role_allowed_to_create_backdated_leave_application",
+  "enable_leave_in_hours",
+  "hours_per_working_day",
   "expenses_tab",
   "expenses_settings_section",
   "expense_approver_mandatory_in_expense_claim",
@@ -109,6 +111,20 @@
    "label": "Role Allowed to Create Backdated Leave Application",
    "mandatory_depends_on": "eval:doc.restrict_backdated_leave_application == 1",
    "options": "Role"
+  },
+  {
+   "default": "0",
+   "fieldname": "enable_leave_in_hours",
+   "fieldtype": "Check",
+   "label": "Allow Leave in Hours"
+  },
+  {
+   "default": "8",
+   "depends_on": "eval:doc.enable_leave_in_hours == 1",
+   "fieldname": "hours_per_working_day",
+   "fieldtype": "Float",
+   "label": "Hours Per Working Day",
+   "description": "Number of working hours per day used to convert leave hours to days. Cannot exceed 24."
   },
   {
    "default": "1",

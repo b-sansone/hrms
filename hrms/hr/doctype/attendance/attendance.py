@@ -12,6 +12,7 @@ from frappe.utils import (
 	add_days,
 	cint,
 	cstr,
+	flt,
 	format_date,
 	get_datetime,
 	get_link_to_form,
@@ -26,6 +27,7 @@ from hrms.hr.utils import (
 	validate_active_employee,
 )
 from hrms.utils.holiday_list import get_holiday_dates_between_range
+from hrms.hr.doctype.leave_application.leave_application import get_hours_per_working_day
 
 
 class DuplicateAttendanceError(frappe.ValidationError):
@@ -163,6 +165,9 @@ class Attendance(Document):
 				LeaveApplication.half_day,
 				LeaveApplication.half_day_date,
 				LeaveApplication.name,
+				LeaveApplication.from_date,
+				LeaveApplication.to_date,
+				LeaveApplication.leave_hours,
 			)
 			.where(
 				(LeaveApplication.employee == self.employee)
@@ -174,10 +179,30 @@ class Attendance(Document):
 		).run(as_dict=True)
 
 		if leave_record:
-			for d in leave_record:
-				self.leave_type = d.leave_type
-				self.leave_application = d.name
-				if d.half_day_date == getdate(self.attendance_date):
+			hours_per_day = get_hours_per_working_day()
+
+			for record in leave_record:
+				self.leave_type = record.leave_type
+				self.leave_application = record.name
+
+				is_single_day = record.from_date == record.to_date
+				if hours_per_day and is_single_day and record.leave_hours:
+					# Hours mode: determine status from how many hours are taken
+					if flt(record.leave_hours) < flt(hours_per_day):
+						self.status = "Half Day"
+						frappe.msgprint(
+							_("Employee {0} on Half day on {1}").format(
+								self.employee, format_date(self.attendance_date)
+							)
+						)
+					else:
+						self.status = "On Leave"
+						frappe.msgprint(
+							_("Employee {0} is on Leave on {1}").format(
+								self.employee, format_date(self.attendance_date)
+							)
+						)
+				elif record.half_day_date == getdate(self.attendance_date):
 					self.status = "Half Day"
 					frappe.msgprint(
 						_("Employee {0} on Half day on {1}").format(
