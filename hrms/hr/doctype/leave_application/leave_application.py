@@ -46,6 +46,16 @@ def get_hours_per_working_day() -> float | None:
 	return None
 
 
+@frappe.whitelist()
+def get_leave_in_hours_settings():
+	"""Return leave-in-hours HR Settings for use by the Leave Application form."""
+	return {
+		"enable_leave_in_hours": frappe.db.get_single_value("HR Settings", "enable_leave_in_hours"),
+		"hours_per_working_day": frappe.db.get_single_value("HR Settings", "hours_per_working_day")
+		or 8,
+	}
+
+
 class LeaveDayBlockedError(frappe.ValidationError):
 	pass
 

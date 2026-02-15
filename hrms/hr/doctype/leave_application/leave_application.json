@@ -132,6 +132,7 @@
   {
    "fieldname": "leave_hours",
    "fieldtype": "Float",
+   "hidden": 1,
    "label": "Leave Hours",
    "no_copy": 0,
    "precision": "2"

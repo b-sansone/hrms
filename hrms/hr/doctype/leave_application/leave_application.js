@@ -22,8 +22,20 @@ frappe.ui.form.on("Leave Application", {
 		if (!frm.doc.posting_date) {
 			frm.set_value("posting_date", frappe.datetime.get_today());
 		}
+
+		frappe.call({
+			method: "hrms.hr.doctype.leave_application.leave_application.get_leave_in_hours_settings",
+			callback: function (r) {
+				if (r && r.message) {
+					frm.leave_in_hours_enabled = cint(r.message.enable_leave_in_hours);
+					frm.hours_per_working_day = flt(r.message.hours_per_working_day) || 8;
+					frm.trigger("toggle_hours_mode");
+				}
+			},
+		});
+
 		if (frm.doc.docstatus == 0) {
-			return frappe.call({
+			frappe.call({
 				method: "hrms.hr.doctype.leave_application.leave_application.get_mandatory_approval",
 				args: {
 					doctype: frm.doc.doctype,
@@ -93,11 +105,6 @@ frappe.ui.form.on("Leave Application", {
 	refresh: function (frm) {
 		hrms.leave_utils.add_view_ledger_button(frm);
 
-		// Read hours mode settings passed from Python onload
-		if (frm.doc.__onload) {
-			frm.leave_in_hours_enabled = cint(frm.doc.__onload.enable_leave_in_hours);
-			frm.hours_per_working_day = flt(frm.doc.__onload.hours_per_working_day) || 8;
-		}
 		frm.trigger("toggle_hours_mode");
 
 		if (frm.is_new()) {
